@@ -1,0 +1,110 @@
+---
+title: "20210617_ve06_iWAT_RNA"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+
+# Sample preparation
+Prepare input samples with tximport
+```{r}
+#prepare the samples using txi
+
+library(GenomicFeatures)
+
+TxDb <- makeTxDbFromGFF(file="mus_musculus.ENCODE.vM27/Mus_musculus.GRCm39.104.gtf.gz", organism="Mus musculus")
+k <- keys(TxDb, keytype = "TXNAME")
+tx2gene <- select(TxDb, k, "GENEID", "TXNAME")
+
+
+#exclude animal #10, 11
+samplesInfo <- read.csv(file="20210520_ve06_metadata_deseq_sort.csv")
+samplesInfo <- subset(samplesInfo, Ear.Tag != 10 & Ear.Tag != 11)
+rownames(samplesInfo) <- samplesInfo$RNA_ID
+samplesInfo$Surgery <- factor(samplesInfo$Surgery, levels = c("Ctl", "Abl"))
+samplesInfo$Treatment <- factor(samplesInfo$Treatment, levels = c("RT", "Cold"))
+samplesInfo$Animal <- factor(samplesInfo$Animal)
+
+samplesInfo
+
+```
+
+
+
+```{r}
+library("tximport")
+files <- samplesInfo$File_dir
+names(files) <- samplesInfo$RNA_ID
+txi <- tximport(files, type="salmon", tx2gene=tx2gene, dropInfReps=T, ignoreTxVersion=T)
+
+```
+
+```{r}
+sampleData <- DataFrame(RNA_ID = samplesInfo$RNA_ID,
+                        Animal=factor(samplesInfo$Animal),
+                        Surgery = factor(samplesInfo$Surgery, levels = c("Ctl", "Abl")),
+                        Treatment = factor(samplesInfo$Treatment, levels = c("RT", "Cold")),
+                        ani.Tx = factor(samplesInfo$ani.Tx))
+```
+
+
+## import into DESeq
+```{r}
+library("DESeq2")
+ddsTxi <- DESeqDataSetFromTximport(txi,
+                                   colData = sampleData,
+                                   design = ~ Treatment)
+design <- model.matrix(~ Treatment + Treatment:ani.Tx + Treatment:Surgery, sampleData)
+design <- design[, -10]
+dds <- DESeq(ddsTxi, full=design)
+```
+```{r}
+res.RT <- results(dds, name="TreatmentRT.SurgeryAbl")
+res.Cold <- results(dds, name="TreatmentCold.SurgeryAbl")
+resLFC.RT <- lfcShrink(dds, coef="TreatmentRT.SurgeryAbl", type="apeglm")
+resLFC.Cold <- lfcShrink(dds, coef="TreatmentCold.SurgeryAbl", type="apeglm")
+```
+
+```{r}
+plotMA(res.RT)
+```
+
+annotation
+```{r}
+res.RT$ensembl_ID <- rownames(res.RT)
+
+library(org.Mm.eg.db)
+idfound <- res.RT$ensembl_ID %in% mappedRkeys(org.Mm.egENSEMBL)
+res.RT <- res.RT[idfound,]
+eg_ensembl <- toTable(org.Mm.egENSEMBL)
+m <- match(res.RT$ensembl_ID, eg_ensembl$ensembl_id)
+res.RT$EntrezGene <- eg_ensembl$gene_id[m]
+eg_symbl <- toTable(org.Mm.egSYMBOL)
+m <- match(res.RT$EntrezGene, eg_symbl$gene_id)
+res.RT$Symbol <- eg_symbl$symbol[m]
+eg_genename <- toTable(org.Mm.egGENENAME)
+m <- match(res.RT$EntrezGene, eg_genename$gene_id)
+res.RT$GeneName <- eg_genename$gene_name[m]
+
+write.csv(res.RT, file = "salmon_deseq2_nested_RT_ablation.csv")
+```
+```{r}
+res.Cold$ensembl_ID <- rownames(res.Cold)
+
+library(org.Mm.eg.db)
+idfound <- res.Cold$ensembl_ID %in% mappedRkeys(org.Mm.egENSEMBL)
+res.Cold <- res.Cold[idfound,]
+eg_ensembl <- toTable(org.Mm.egENSEMBL)
+m <- match(res.Cold$ensembl_ID, eg_ensembl$ensembl_id)
+res.Cold$EntrezGene <- eg_ensembl$gene_id[m]
+eg_symbl <- toTable(org.Mm.egSYMBOL)
+m <- match(res.Cold$EntrezGene, eg_symbl$gene_id)
+res.Cold$Symbol <- eg_symbl$symbol[m]
+eg_genename <- toTable(org.Mm.egGENENAME)
+m <- match(res.Cold$EntrezGene, eg_genename$gene_id)
+res.Cold$GeneName <- eg_genename$gene_name[m]
+head(res.Cold)
+
+write.csv(res.Cold, file = "salmon_deseq2_nested_Cold_ablation.csv")
+```
